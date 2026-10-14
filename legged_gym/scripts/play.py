@@ -1,7 +1,7 @@
-import sys
-from legged_gym import LEGGED_GYM_ROOT_DIR
+import math
 import os
 import sys
+
 from legged_gym import LEGGED_GYM_ROOT_DIR
 
 import isaacgym
@@ -10,6 +10,71 @@ from legged_gym.utils import  get_args, export_policy_as_jit, task_registry, Log
 
 import numpy as np
 import torch
+
+
+def apply_fixed_command(env, args):
+    """Pin the velocity commands instead of re-randomizing them every 10 s.
+
+    The environment re-randomizes commands on a timer and on every reset, so the
+    one place that writes them is overridden rather than setting ``env.commands``
+    once -- that would be undone a few hundred steps later.
+
+    There are two ways to ask for a turn and they need different plumbing,
+    because a *target heading* is turned into a yaw rate by the environment
+    itself (see ``LeggedRobot._post_physics_step_callback``):
+
+    ``--cmd_wz``      a fixed yaw rate. The heading loop rewrites ``commands[:,2]``
+                      from the heading error every single step, so it has to be
+                      switched off or the value never survives.
+    ``--cmd_heading``  a fixed target heading, in degrees. The heading loop is
+                      what implements this, so it is forced on and the yaw rate
+                      is left to the environment.
+    """
+    if args.cmd_heading is not None and args.cmd_wz is not None:
+        sys.exit("--cmd_heading and --cmd_wz cannot be combined: the environment "
+                 "derives the yaw rate from the heading error, so a fixed yaw rate "
+                 "would be overwritten every step. Pass one or the other.")
+
+    if not any(c is not None for c in
+               (args.cmd_vx, args.cmd_vy, args.cmd_wz, args.cmd_heading)):
+        return
+
+    fixed = torch.tensor(
+        [0.0 if c is None else c for c in (args.cmd_vx, args.cmd_vy, args.cmd_wz)],
+        device=env.device)
+    # ``commands[:,3]`` is the *target heading*, and it starts out randomized over
+    # +-pi. It has to be pinned as well: the heading loop reads it every step to
+    # derive the yaw rate, so leaving it alone makes the robot walk off toward
+    # whatever direction it was seeded with. Holding 0 means "keep facing the way
+    # you started", which is what a bare --cmd_vx is asking for.
+    heading = 0.0 if args.cmd_heading is None else math.radians(args.cmd_heading)
+
+    def _resample_commands(env_ids, _cmd=fixed, _heading=heading):
+        if len(env_ids):
+            env.commands[env_ids, :3] = _cmd
+            env.commands[env_ids, 3] = _heading
+
+    env._resample_commands = _resample_commands
+    env.commands[:, :3] = fixed
+    env.commands[:, 3] = heading
+
+    if args.cmd_wz is not None:
+        # a fixed yaw *rate* only survives with the heading loop out of the way
+        env.cfg.commands.heading_command = False
+    else:
+        # a fixed target heading is implemented *by* the heading loop
+        env.cfg.commands.heading_command = True
+
+    print("Holding the command fixed at vx=%+.2f vy=%+.2f wz=%+.2f"
+          % tuple(fixed.tolist()))
+    if args.cmd_heading is not None:
+        print("  target heading %+.1f deg (%+.3f rad): the robot turns to it and holds"
+              % (args.cmd_heading, heading))
+    elif args.cmd_wz is None:
+        print("  target heading 0.0 deg: the robot holds the direction it started in")
+    if args.cmd_wz is not None:
+        print("  heading_command switched off, otherwise it would overwrite wz "
+              "on every step")
 
 
 def play(args):
@@ -29,21 +94,7 @@ def play(args):
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
 
     # Optionally hold the velocity command fixed instead of leaving it random.
-    # The environment re-randomizes commands every resampling_time and on every
-    # reset, so override the one place that writes them rather than setting
-    # env.commands once (that would be undone a few hundred steps later).
-    if any(c is not None for c in (args.cmd_vx, args.cmd_vy, args.cmd_wz)):
-        fixed_command = torch.tensor(
-            [0.0 if c is None else c for c in (args.cmd_vx, args.cmd_vy, args.cmd_wz)],
-            device=env.device)
-
-        def _resample_commands(env_ids, _cmd=fixed_command):
-            if len(env_ids):
-                env.commands[env_ids, :3] = _cmd
-
-        env._resample_commands = _resample_commands
-        env.commands[:, :3] = fixed_command
-        print("Holding the command fixed at vx=%+.2f vy=%+.2f wz=%+.2f" % tuple(fixed_command.tolist()))
+    apply_fixed_command(env, args)
 
     obs = env.get_observations()
     # load policy

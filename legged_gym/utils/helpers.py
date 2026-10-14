@@ -137,7 +137,8 @@ def get_args():
 
         {"name": "--cmd_vx", "type": float, "default": None, "help": "Play/inspection: hold the forward velocity command fixed at this value [m/s] instead of re-randomizing it. Unset: keep the environment's random commands"},
         {"name": "--cmd_vy", "type": float, "default": None, "help": "Play/inspection: hold the lateral velocity command fixed [m/s]. Defaults to 0 when any --cmd_* is given"},
-        {"name": "--cmd_wz", "type": float, "default": None, "help": "Play/inspection: hold the yaw rate command fixed [rad/s]. Defaults to 0 when any --cmd_* is given"},
+        {"name": "--cmd_wz", "type": float, "default": None, "help": "Play/inspection: hold the yaw rate command fixed [rad/s]. Only meaningful when the task does NOT use heading_command, because with it the environment rewrites the yaw rate from the heading error every step; play.py switches the heading loop off when this is given. Mutually exclusive with --cmd_heading"},
+        {"name": "--cmd_heading", "type": float, "default": None, "help": "Play/inspection: hold the target heading fixed at this value in DEGREES (0 = the robot's initial facing, +90 = a quarter turn to its left) instead of re-randomizing it. The environment converts it into the yaw rate, so the robot turns to face it and holds. Mutually exclusive with --cmd_wz"},
     ]
     # parse arguments
     args = gymutil.parse_arguments(
