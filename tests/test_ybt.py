@@ -59,8 +59,8 @@ class YBTTests(unittest.TestCase):
         self.path = validate_ybt_asset(self.cfg)
         self.root = ET.parse(str(self.path)).getroot()
 
-    def test_registration_is_ybt_only(self):
-        self.assertEqual(set(task_registry.task_classes), {"ybt"})
+    def test_registration(self):
+        self.assertEqual(set(task_registry.task_classes), {"ybt", "ybt_arm"})
         self.assertIs(task_registry.get_task_class("ybt"), YBTRobot)
         self.assertTrue(issubclass(YBTRobot, LeggedRobot))
         self.assertEqual(task_registry.get_cfgs("ybt")[1].runner.experiment_name, "flat_ybt")

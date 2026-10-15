@@ -23,10 +23,19 @@ def validate_ybt_asset(cfg):
             raise FileNotFoundError("YBT mesh is missing or empty: {}".format(mesh_path))
     joints = {joint.attrib["name"]: joint for joint in root.findall("joint")
               if joint.attrib["type"] != "fixed"}
-    if len(joints) != 12 or set(joints) != set(cfg.init_state.default_joint_angles):
-        raise ValueError("YBT requires 12 movable joints matching default_joint_angles")
-    if cfg.env.num_actions != 12 or cfg.env.num_observations != 48:
-        raise ValueError("YBT uses 12 actions and the base environment's 48 observations")
+    # the plain quadruped has 12 joints, ybt_arm has 18; everything here is driven
+    # by the config so both tasks share this validator
+    n_joints = len(cfg.init_state.default_joint_angles)
+    if len(joints) != n_joints or set(joints) != set(cfg.init_state.default_joint_angles):
+        raise ValueError("YBT requires {} movable joints matching default_joint_angles, "
+                         "the asset has {}".format(n_joints, len(joints)))
+    if cfg.env.num_actions != n_joints:
+        raise ValueError("YBT needs one action per joint: {} joints, {} actions".format(
+            n_joints, cfg.env.num_actions))
+    n_obs = 12 + 3 * cfg.env.num_actions
+    if cfg.env.num_observations != n_obs:
+        raise ValueError("YBT uses {} actions and {} observations".format(
+            cfg.env.num_actions, n_obs))
     if cfg.terrain.mesh_type != "plane":
         raise ValueError("The YBT task currently implements flat-ground training only")
     if not math.isfinite(cfg.init_state.joint_angle_noise) or cfg.init_state.joint_angle_noise < 0:

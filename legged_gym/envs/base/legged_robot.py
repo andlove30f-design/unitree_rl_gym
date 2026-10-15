@@ -317,7 +317,10 @@ class LeggedRobot(BaseTask):
             [torch.Tensor]: Torques sent to the simulation
         """
         #pd controller
-        actions_scaled = actions * self.cfg.control.action_scale
+        # action_scale is a per-joint vector, not the cfg scalar: a joint whose
+        # entry is 0 ignores the policy completely and is held by the PD at its
+        # default angle (used to freeze the arm on the armed quadruped)
+        actions_scaled = actions * self.action_scale
         control_type = self.cfg.control.control_type
         if control_type=="P":
             torques = self.p_gains*(actions_scaled + self.default_dof_pos - self.dof_pos) - self.d_gains*self.dof_vel
@@ -450,6 +453,9 @@ class LeggedRobot(BaseTask):
         self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.p_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.d_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        # per-joint action scale, seeded from the cfg scalar; tasks that need a
+        # joint frozen (e.g. the arm on ybt_arm) override individual entries
+        self.action_scale = torch.full((self.num_dof,), float(self.cfg.control.action_scale), dtype=torch.float, device=self.device, requires_grad=False)
         self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_dof_vel = torch.zeros_like(self.dof_vel)
