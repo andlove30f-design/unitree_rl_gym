@@ -79,12 +79,12 @@ class YBTFlatCfg(LeggedRobotCfg):
         max_contact_force = 500.0
         # Swing-foot clearance reward (YBTRobot._reward_feet_clearance). A foot
         # body lifted between feet_clearance_target and feet_clearance_cap [m]
-        # above the ground scores; the foot collision sphere has radius 0.03, so
-        # a resting foot origin sits at ~0.03-0.04 m. The term is clamped at >= 0
-        # so dragging a foot (reward 0) is never better than lifting it -- that
-        # was the failure mode of raising the base air-time reward. The cap is
-        # kept low so lifting past a normal trot height earns nothing (no
-        # marching); see the weight note on feet_clearance below.
+        # scores full marks; the payment tapers back to zero over one more span
+        # above the cap, so over-lifting earns nothing instead of being the best
+        # available move. The foot collision sphere has radius 0.03, so a resting
+        # foot origin sits at ~0.03-0.04 m. The term is clamped at >= 0 so dragging
+        # a foot (reward 0) is never better than lifting it -- that was the failure
+        # mode of a raw air-time reward.
         feet_clearance_target = 0.05
         feet_clearance_cap = 0.09
 
@@ -96,6 +96,13 @@ class YBTFlatCfg(LeggedRobotCfg):
             # Secondary to velocity tracking: at 1.0 this term reached ~85% of
             # the total reward and the robot marched instead of walking.
             feet_clearance = 0.3
+            # The base class pays for long-air-time steps against a hard-coded
+            # 0.5 s reference. This robot's measured swing time is ~0.15 s, so
+            # every touchdown scored negative and the cheapest way to reduce the
+            # penalty was to swing higher -- a second, wrong-signed push toward
+            # marching. It was only 0.4% of the total, so it is simply switched
+            # off; feet_clearance covers the same job with the sign the right way.
+            feet_air_time = 0.0
 
     class sim(LeggedRobotCfg.sim):
         dt = 0.005  # 200 Hz physics; decimation=4 gives 50 Hz policy

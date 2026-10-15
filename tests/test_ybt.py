@@ -129,6 +129,28 @@ class YBTTests(unittest.TestCase):
         robot.contact_forces[:, :4, 2] = 5.0     # a high foot still in contact: no reward
         self.assertEqual(robot._reward_feet_clearance().sum().item(), 0.0)
 
+    def test_feet_clearance_tapers_off_above_the_cap(self):
+        # Over-lifting past the cap must stop paying, or the best available move is
+        # to park the legs high and the robot marches. It must taper, not flip sign,
+        # so that a foot is never punished for being in the air at all.
+        robot = object.__new__(YBTRobot)
+        robot.cfg = self.cfg
+        robot.feet_indices = torch.arange(4)
+        robot.contact_forces = torch.zeros(2, 6, 3)   # all four feet airborne
+        robot.rigid_body_states = torch.zeros(2, 6, 13)
+        target = self.cfg.rewards.feet_clearance_target
+        cap = self.cfg.rewards.feet_clearance_cap
+        span = cap - target
+
+        robot.rigid_body_states[:, :4, 2] = cap + 0.5 * span  # half a span past the cap
+        rew = robot._reward_feet_clearance()
+        self.assertTrue(torch.allclose(rew, torch.full_like(rew, 2.0)))
+
+        for height in (cap + span, cap + 10 * span, 1.0):
+            robot.rigid_body_states[:, :4, 2] = height
+            # float32: cap + span round-trips to just under the cap, leaving ~1e-6
+            self.assertLess(robot._reward_feet_clearance().sum().item(), 1e-5)
+
     def test_rejects_invalid_default_angles(self):
         bad = copy.deepcopy(self.cfg)
         bad.init_state.default_joint_angles = dict(self.cfg.init_state.default_joint_angles)

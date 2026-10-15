@@ -77,16 +77,23 @@ class YBTRobot(LeggedRobot):
         self.gym.refresh_rigid_body_state_tensor(self.sim)
 
     def _reward_feet_clearance(self):
-        # Reward swing feet for clearing the ground. Clamped at >= 0 so a foot
-        # dragged along the floor (reward 0) is never better than one lifted off
-        # it; the base air-time reward had the opposite incentive, which the
-        # policy exploited by dragging its legs.
+        # Reward swing feet for clearing the ground, as a *band* rather than a
+        # one-sided ramp. A foot scores while it is between feet_clearance_target
+        # and feet_clearance_cap, and the payment tapers back to zero over the same
+        # width again above the cap. The old ramp saturated at the cap and stayed
+        # there, so nothing ever pulled an over-lifted foot back down and the policy
+        # parked its legs well above it -- measured median swing height 0.157 m
+        # against a 0.09 m cap, with 95% of airborne feet past the cap. Clamped at
+        # >= 0, so a foot dragged along the floor (reward 0) is still never better
+        # than one lifted off it.
         contact = self.contact_forces[:, self.feet_indices, 2] > 1.
         foot_z = self.rigid_body_states[:, self.feet_indices, 2]
         target = self.cfg.rewards.feet_clearance_target
         cap = self.cfg.rewards.feet_clearance_cap
-        clearance = ((foot_z - target) / (cap - target)).clip(min=0., max=1.)
-        return torch.sum(clearance * (~contact), dim=1)
+        span = cap - target
+        rise = ((foot_z - target) / span).clip(min=0., max=1.)  # 0 -> 1 across the band
+        drop = ((foot_z - cap) / span).clip(min=0., max=1.)     # 1 -> 0 again above it
+        return torch.sum((rise - drop) * (~contact), dim=1)
 
     def _reset_dofs(self, env_ids):
         # YBT knees have positive-only limits. Multiplying 1.6 by 0.5 can
