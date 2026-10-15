@@ -18,8 +18,8 @@ YBT 已注册为独立任务 `ybt`，复用仓库的四足观测、PD 力矩控�
 
 修改文件：
 
-- `legged_gym/envs/__init__.py`：导入并注册 `ybt`，保留 Go2/G1/H1/H1_2。
-- `README_zh.md`：添加 YBT 训练入口和说明链接。
+- `legged_gym/envs/__init__.py`：只导入并注册 `ybt`（Go2/G1/H1/H1_2 已从本仓库删除）。
+- `README.md` / `README_zh.md`：改为只描述 YBT 的训练、Play 和工具入口。
 - `resources/robots/ybt/urdf/ybt.urdf`：仅将一处 `orange` 颜色从 0..255 归一化到 0..1；没有修改几何、质量、惯量、关节名或限位。
 
 使用用户已添加的资源（五个网格没有重新生成或转换）：
@@ -95,7 +95,7 @@ python legged_gym/scripts/play.py --task=ybt --num_envs=16
 
 检查点保存在 `logs/flat_ybt/<日期时间>_<run_name>/model_<iteration>.pt`。
 Play 的导出文件为 `logs/flat_ybt/exported/policies/policy_1.pt`。
-新任务默认从头训练，不会自动加载 Go2 的 `motion.pt`；形态和关节方向不同，即使网络维度相同也不能认为策略可以直接复用。
+新任务默认从头训练，不会自动加载任何预训练模型。
 
 继续某次训练可显式指定 `--resume --load_run=<运行文件夹名> --checkpoint=<编号>`。
 既有训练入口和 Play 不需要为 YBT 改动。

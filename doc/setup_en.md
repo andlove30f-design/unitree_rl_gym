@@ -130,27 +130,6 @@ cd unitree_rl_gym
 pip install -e .
 ```
 
-### 2.5 Install unitree_sdk2py (Optional)
-
-`unitree_sdk2py` is a library used for communication with real robots. If you need to deploy the trained model on a physical robot, install this library.
-
-#### 2.5.1 Download
-
-Clone the repository using Git:
-
-```bash
-git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
-```
-
-#### 2.5.2 Install
-
-Navigate to the directory and install it:
-
-```bash
-cd unitree_sdk2_python
-pip install -e .
-```
-
 ---
 
 ## Summary

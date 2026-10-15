@@ -130,27 +130,6 @@ cd unitree_rl_gym
 pip install -e .
 ```
 
-### 2.5 安装 unitree_sdk2py（可选）
-
-`unitree_sdk2py` 是用于与真实机器人通信的库。如果需要将训练的模型部署到物理机器人上运行，可以安装此库。
-
-#### 2.5.1 下载
-
-通过 Git 克隆仓库：
-
-```bash
-git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
-```
-
-#### 2.5.2 安装
-
-进入目录并安装：
-
-```bash
-cd unitree_sdk2_python
-pip install -e .
-```
-
 ---
 
 ## 总结

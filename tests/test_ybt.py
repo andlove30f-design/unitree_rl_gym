@@ -59,11 +59,11 @@ class YBTTests(unittest.TestCase):
         self.path = validate_ybt_asset(self.cfg)
         self.root = ET.parse(str(self.path)).getroot()
 
-    def test_registration_preserves_existing_tasks(self):
-        self.assertTrue({"go2", "g1", "h1", "h1_2", "ybt"}.issubset(task_registry.task_classes))
+    def test_registration_is_ybt_only(self):
+        self.assertEqual(set(task_registry.task_classes), {"ybt"})
         self.assertIs(task_registry.get_task_class("ybt"), YBTRobot)
-        self.assertIs(task_registry.get_task_class("go2"), LeggedRobot)
-        self.assertEqual(task_registry.get_cfgs("go2")[1].runner.experiment_name, "rough_go2")
+        self.assertTrue(issubclass(YBTRobot, LeggedRobot))
+        self.assertEqual(task_registry.get_cfgs("ybt")[1].runner.experiment_name, "flat_ybt")
 
     def test_training_defaults(self):
         ppo = YBTFlatCfgPPO()
