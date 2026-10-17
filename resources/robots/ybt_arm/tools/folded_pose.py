@@ -18,6 +18,17 @@ away from the task. Run it after changing them:
     python resources/robots/ybt_arm/tools/folded_pose.py --grid    # search q2/q3/q5
     python resources/robots/ybt_arm/tools/folded_pose.py 1.0 2.0 0.8   # try angles
 
+`--sweep` is for the *standing-balance* task (`ybt_arm_stand`), which drives the arm
+back and forth between the folded pose and a working pose instead of holding it still.
+Give it the six angles of that working pose and it walks the line between the two,
+reporting the worst clearance, the joint-limit margin and the PD torque the swing
+needs -- and, above all, how far the arm's mass centre travels, which is the only
+reason a 7.17 kg arm is worth training legs against.  The task's working pose, which
+is the one this settles:
+
+    python resources/robots/ybt_arm/tools/folded_pose.py --sweep 0.0 -1.5 0.0 0.0 0.8 0.6
+    # mass centre travels 0.373 m, worst clearance +0.050 m, hardest joint q2 at 31%
+
 The numbers it prints for the default pose are the ones quoted in README.md.
 """
 import argparse
@@ -36,6 +47,13 @@ CONFIG = os.path.normpath(os.path.join(
 # top face of the trunk's visual deck plate (from trunk.dae); arm_base_link is bolted
 # onto it, so it is the height a folded arm has to stay above
 DECK_TOP = 0.1012
+# the trunk's origin is 0.6202 m above the ground in the ybt standing pose, so this is
+# where the floor is in the trunk frame (see README.md)
+GROUND_Z = -0.6202
+# how far the arm's mass centre has to travel horizontally for the swing to be worth
+# training legs against: the arm moves the 7.17 kg on a 68.84 kg robot, so anything
+# much under this is lost in the noise of a stance that tolerates centimetres
+COM_EXCURSION_TARGET = 0.30
 G = 9.81
 ARM_JOINT_PREFIX = "arm_joint_"
 
@@ -132,13 +150,16 @@ class Model(object):
                 boxes.append((xyz, rpy, bounds))
             self.links[name] = dict(mass=mass, com=com, boxes=boxes)
         for joint in root.findall("joint"):
-            origin, axis = joint.find("origin"), joint.find("axis")
+            origin, axis, limit = joint.find("origin"), joint.find("axis"), joint.find("limit")
             self.joints[joint.get("name")] = dict(
                 parent=joint.find("parent").get("link"), child=joint.find("child").get("link"),
                 type=joint.get("type"),
                 xyz=parse_xyz(origin.get("xyz")) if origin is not None else (0.0, 0.0, 0.0),
                 rpy=parse_xyz(origin.get("rpy")) if origin is not None else (0.0, 0.0, 0.0),
-                axis=parse_xyz(axis.get("xyz")) if axis is not None else (1.0, 0.0, 0.0))
+                axis=parse_xyz(axis.get("xyz")) if axis is not None else (1.0, 0.0, 0.0),
+                lower=float(limit.get("lower")) if limit is not None and limit.get("lower") else None,
+                upper=float(limit.get("upper")) if limit is not None and limit.get("upper") else None,
+                effort=float(limit.get("effort")) if limit is not None and limit.get("effort") else None)
         self.parents = {j["child"]: j["parent"] for j in self.joints.values()}
         self.arm_links = sorted((n for n in self.links if n.startswith("arm_link_")),
                                 key=lambda n: int(n.rsplit("_", 1)[1]))
@@ -226,6 +247,7 @@ def evaluate(model, angles):
 
     torques = {}
     distal = {}
+    axis_inertia = {}
     for name in model.arm_joint_names():
         joint = model.joints[name]
         Rp, tp = poses[joint["parent"]]
@@ -234,6 +256,7 @@ def evaluate(model, angles):
         norm = math.sqrt(sum(v * v for v in axis_world))
         axis_world = tuple(v / norm for v in axis_world)
         torque = 0.0
+        inertia_axis = 0.0
         for link, point in points.items():
             # what the joint actually carries: the links at and below its child
             if not model.is_distal(link, joint["child"]):
@@ -245,10 +268,17 @@ def evaluate(model, angles):
                      r[2] * force[0] - r[0] * force[2],
                      r[0] * force[1] - r[1] * force[0])
             torque += sum(axis_world[d] * cross[d] for d in range(3))
+            # rotational inertia about this joint's own axis: the radius is the
+            # distance from the axis *line*, not from the joint origin.  This is the
+            # mass-matrix diagonal the PD gains in the config are sized against
+            along = sum(axis_world[d] * r[d] for d in range(3))
+            inertia_axis += model.links[link]["mass"] * sum(
+                (r[d] - along * axis_world[d]) ** 2 for d in range(3))
         torques[name] = torque
+        axis_inertia[name] = inertia_axis
     return dict(trunk_top=trunk_top, lowest=lowest, moving_lowest=moving_lowest,
                 footprint=tuple(footprint), com=com, mass=mass, inertia=inertia,
-                torques=torques, distal=distal)
+                torques=torques, distal=distal, axis_inertia=axis_inertia)
 
 
 def report(model, angles, label):
@@ -295,6 +325,128 @@ def configured_angles(path=CONFIG):
     raise SystemExit("could not find default_joint_angles in " + path)
 
 
+def pose_text(angles):
+    return " ".join("%s=%+.3f" % (k.replace(ARM_JOINT_PREFIX, "q"), angles[k])
+                    for k in sorted(angles))
+
+
+def sweep(model, home, target, samples=21, frequency=0.5):
+    """Walk the line between two arm poses and report the worst pose on it.
+
+    The stand task drives the arm from `home` to `target` and back along an eased
+    sine, so the poses it visits are exactly this line -- the easing changes when,
+    not where.  That makes the whole swing checkable without a simulator, which
+    matters because two of the numbers below would otherwise only show up as a
+    mysterious training failure:
+
+      * how far the arm's mass centre travels horizontally.  The arm's moving links
+        are 5.31 kg of a 68.84 kg robot, so the trunk's centre of mass moves 0.077x
+        that distance -- and that shift, not the joint torques, is the whole
+        disturbance: the legs feel it as weight coming off the rear feet and onto the
+        front ones.  A swing whose mass centre barely moves is not a balance task.
+      * whether the swing stays clear of the trunk's collision box and the ground,
+        and inside the URDF limits -- the policy cannot fix a pose that collides.
+    """
+    trunk_top = trunk_collision_top(model)
+    home_result = evaluate(model, home)
+    home_com = home_result["com"]
+    share = sum(model.links[n]["mass"] for n in model.arm_links) \
+        / sum(link["mass"] for link in model.links.values())
+    # peak |angular acceleration| of the reference: the eased sine (1 - cos)/2 has a
+    # second derivative of |dq| * w^2 / 2 at the ends of the stroke
+    alpha = {n: abs(target[n] - home[n]) * (2.0 * math.pi * frequency) ** 2 / 2.0
+             for n in home}
+
+    print("sweep %s" % pose_text(home))
+    print("   -> %s" % pose_text(target))
+    print("     %d poses along the straight line between them, played at %.2f Hz"
+          % (samples, frequency))
+    print()
+    print("     s    clearance   lowest    com_x    com_y   excursion  most loaded")
+    worst_clear = worst_z = None
+    excursion = 0.0
+    footprint = [1e9, 1e9, -1e9, -1e9]
+    torque = {}
+    limit_margin = {}
+    for i in range(samples):
+        s = i / float(samples - 1)
+        angles = {k: home[k] + s * (target[k] - home[k]) for k in home}
+        r = evaluate(model, angles)
+        clear = r["moving_lowest"][0] - trunk_top
+        com = r["com"]
+        travel = math.hypot(com[0] - home_com[0], com[1] - home_com[1])
+        excursion = max(excursion, travel)
+        if clear < (worst_clear[1] if worst_clear else 1e9):
+            worst_clear = (s, clear)
+        if r["moving_lowest"][0] < (worst_z[1] if worst_z else 1e9):
+            worst_z = (s, r["moving_lowest"][0])
+        for a in range(4):
+            footprint[a] = min(footprint[a], r["footprint"][a]) if a < 2 \
+                else max(footprint[a], r["footprint"][a])
+        worst_use, worst_name = 0.0, None
+        for name in model.arm_joint_names():
+            # what the joint has to deliver at this pose: the gravity torque it holds
+            # there, plus what it takes to accelerate the links below it at the
+            # reference's own angular acceleration.  The damping term is not counted,
+            # so this is a lower bound on the cost of the swing.
+            duty = abs(r["torques"][name]) + r["axis_inertia"][name] * alpha[name]
+            torque[name] = max(torque.get(name, 0.0), duty)
+            joint = model.joints[name]
+            if joint["lower"] is not None:
+                margin = min(angles[name] - joint["lower"], joint["upper"] - angles[name])
+                if margin < limit_margin.get(name, (1e9,))[0]:
+                    limit_margin[name] = (margin, angles[name])
+            if duty / joint["effort"] > worst_use:
+                worst_use, worst_name = duty / joint["effort"], name
+        print("  %5.2f  %+9.3f %+9.3f %+8.3f %+8.3f %9.3f   %s %3.0f%%"
+              % (s, clear, r["moving_lowest"][0], com[0], com[1], travel,
+                 worst_name.replace(ARM_JOINT_PREFIX, "q"), 100 * worst_use))
+    print()
+    good = excursion >= COM_EXCURSION_TARGET
+    print("  mass centre horizontal excursion %.3f m  (want >= %.2f: %s)"
+          % (excursion, COM_EXCURSION_TARGET, "OK" if good else "TOO WEAK"))
+    print("     -> the trunk's centre of mass moves %.3f m of its own  (the arm is %.1f%% "
+          "of the robot's mass)" % (share * excursion, 100 * share))
+    print("  worst clearance above the trunk box %+.3f m at s=%.2f  (box top %+.3f)"
+          % (worst_clear[1], worst_clear[0], trunk_top))
+    print("  lowest arm point over the swing     %+.3f m at s=%.2f  (ground is %+.3f)"
+          % (worst_z[1], worst_z[0], GROUND_Z))
+    print("  footprint x=[%+.3f,%+.3f] y=[%+.3f,%+.3f] m"
+          % (footprint[0], footprint[2], footprint[1], footprint[3]))
+    print("  torque the swing needs (gravity at that pose + inertia * reference "
+          "acceleration) against the URDF effort limit:")
+    failures = []
+    for name in model.arm_joint_names():
+        effort = model.joints[name]["effort"]
+        margin = limit_margin.get(name)
+        use = torque[name] / effort
+        note = "OK" if use <= 0.7 else "TIGHT"
+        print("    %s  %5.1f / %-4.0f N m = %3.0f%%  %s"
+              % (name.replace(ARM_JOINT_PREFIX, "q"), torque[name], effort, 100 * use, note))
+        if use > 1.0:
+            failures.append("%s needs %.0f N m" % (name, torque[name]))
+        if margin is not None and margin[0] < 0.05:
+            failures.append("%s is %.3f rad from its joint limit (q=%+.3f)"
+                            % (name, margin[0], margin[1]))
+    if worst_clear[1] <= 0.0:
+        failures.append("the arm enters the trunk's collision box")
+    if worst_z[1] <= GROUND_Z:
+        failures.append("the arm reaches below the ground")
+    if abs(footprint[1]) > 0.18 or abs(footprint[3]) > 0.18:
+        print("  note: the swing reaches |y| = %.3f m; the hips and the legs live out there, "
+              "check it in the viewer" % max(abs(footprint[1]), abs(footprint[3])))
+    if not good:
+        failures.append("the disturbance is too weak (%.2f m < %.2f m of mass-centre travel)"
+                        % (excursion, COM_EXCURSION_TARGET))
+    print()
+    if failures:
+        print("FAIL: " + "; ".join(failures))
+        return 1
+    print("OK: this swing clears the trunk and the ground, fits the limits and moves the "
+          "mass centre far enough to be a real disturbance")
+    return 0
+
+
 def search(model):
     """Grid search q2/q3/q5 for a low-inertia pose that clears the trunk."""
     trunk_top = trunk_collision_top(model)
@@ -330,6 +482,14 @@ def main(argv=None):
     parser.add_argument("angles", nargs="*", type=float,
                         help="arm_joint_2 arm_joint_3 arm_joint_5 (default: the task's)")
     parser.add_argument("--grid", action="store_true", help="search q2/q3/q5 instead")
+    parser.add_argument("--sweep", action="store_true",
+                        help="all six angles: check the swing from the task's folded pose "
+                             "to those, for the standing-balance task")
+    parser.add_argument("--samples", type=int, default=21,
+                        help="poses to sample along the swing (default 21)")
+    parser.add_argument("--frequency", type=float, default=0.5,
+                        help="how fast the swing is played, in Hz, for --sweep's "
+                             "torque estimate (default 0.5)")
     parser.add_argument("--urdf", default=URDF)
     args = parser.parse_args(argv)
     model = Model(args.urdf)
@@ -338,6 +498,13 @@ def main(argv=None):
         report(model, {}, "zero pose")
         search(model)
         return 0
+
+    if args.sweep:
+        names = model.arm_joint_names()
+        if len(args.angles) != len(names):
+            parser.error("--sweep wants all six angles: " + " ".join(names))
+        target = dict(zip(names, args.angles))
+        return sweep(model, configured_angles(), target, args.samples, args.frequency)
 
     if args.angles:
         if len(args.angles) != 3:

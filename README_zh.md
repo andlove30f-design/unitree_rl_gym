@@ -36,10 +36,14 @@ python legged_gym/scripts/train.py --task=ybt
 
 # 带臂四足（RM65-B 机械臂折起来冻结当配重，第一阶段先练走路）
 python legged_gym/scripts/train.py --task=ybt_arm
+
+# 带臂四足站着不动、机械臂做脚本作业动作，腿学平衡（第二阶段）
+python legged_gym/scripts/train.py --task=ybt_arm_stand
 ```
 
 #### ⚙️  参数说明
-- `--task`: `ybt`（纯四足）或 `ybt_arm`（带 RM65-B 机械臂的四足）。
+- `--task`: `ybt`（纯四足）、`ybt_arm`（带 RM65-B 机械臂的四足）或
+  `ybt_arm_stand`（同一台机器人站立版：速度命令全为 0，机械臂按脚本摆动，腿负责稳住机身）。
 - `--headless`: 默认启动图形界面，设为 true 时不渲染图形界面（效率更高）
 - `--resume`: 从日志中选择 checkpoint 继续训练
 - `--experiment_name`: 运行/加载的 experiment 名称
@@ -67,6 +71,7 @@ Play/查看专用：
 ```bash
 python legged_gym/scripts/play.py --task=ybt
 python legged_gym/scripts/play.py --task=ybt_arm
+python legged_gym/scripts/play.py --task=ybt_arm_stand
 ```
 
 **说明**：
@@ -85,10 +90,11 @@ Play 会导出 Actor 网络，保存于 `logs/{experiment_name}/exported/policie
 
 - `legged_gym/scripts/view_ybt.py`: 不训练，直接在 Isaac Gym 查看器中检查 YBT 的 URDF 和网格。
 - `legged_gym/scripts/check_ybt.py`: 可选的无界面短测（物理、PPO、检查点重载、TorchScript 导出）。
-  两个任务都支持，用 `--task` 选。
-- `resources/robots/ybt_arm/tools/folded_pose.py`: 核对待臂版折叠姿态的最低点、质心、转动惯量和静态力矩。
-- `tests/test_ybt.py` / `tests/test_ybt_arm.py`: 资源、配置、默认站姿、随机复位（以及带臂版的
-  冻结和折叠姿态）的 CPU 回归测试。
+  三个任务都支持，用 `--task` 选。站立版还会顺带量出脚本机械臂的跟踪误差和摆动把机身推歪多少。
+- `resources/robots/ybt_arm/tools/folded_pose.py`: 核对待臂版折叠姿态的最低点、质心、转动惯量和静态力矩；
+  `--sweep` 用来核站立版的作业姿态和摆动行程。
+- `tests/test_ybt.py` / `tests/test_ybt_arm.py` / `tests/test_ybt_arm_stand.py`: 资源、配置、默认站姿、
+  随机复位（带臂版的冻结和折叠姿态；站立版的脚本参考和课程）的 CPU 回归测试。
 
 ```bash
 python -m unittest discover -s tests -p "test_ybt*.py" -v

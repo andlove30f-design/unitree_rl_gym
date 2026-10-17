@@ -96,6 +96,13 @@ def play(args):
     # Optionally hold the velocity command fixed instead of leaving it random.
     apply_fixed_command(env, args)
 
+    # A scripted-arm task starts its script at amplitude 0 and only the training loop
+    # ever grows it, so without this the demo would show a motionless arm. The trained
+    # amplitude is the curriculum's ceiling; nothing persists it in the checkpoint.
+    if hasattr(env, "set_arm_scale"):
+        env.set_arm_scale(env_cfg.arm_trajectory.curriculum_max)
+        print("Scripted arm: amplitude scale {:.2f}".format(env.arm_scale))
+
     obs = env.get_observations()
     # load policy
     train_cfg.runner.resume = True
