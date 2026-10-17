@@ -90,6 +90,23 @@ def play(args):
 
     env_cfg.env.test = True
 
+    # How fast the scripted arm works.  The environment reads this every policy step,
+    # so overriding it here is enough -- no need to change the task.  It is a stress
+    # knob, not a faithful one: at the shipped 0.5 Hz the swing already peaks around
+    # 3.2 rad/s, past the RM65-B's 3.14 rad/s joint limit, and the inertial reaction
+    # grows with frequency squared.
+    if getattr(args, "arm_freq", None) is not None:
+        if not hasattr(env_cfg, "arm_trajectory"):
+            sys.exit("--arm_freq only applies to a scripted-arm task (ybt_arm_stand)")
+        if args.arm_freq <= 0.0:
+            sys.exit("--arm_freq must be positive")
+        print("Arm cycle: {:g} Hz (the task ships {:.2f} Hz)".format(
+            args.arm_freq, env_cfg.arm_trajectory.frequency))
+        if args.arm_freq > 0.5:
+            print("  note: past the arm's 3.14 rad/s joint limit -- a stress test for "
+                  "the legs, not a motion the real arm could make")
+        env_cfg.arm_trajectory.frequency = args.arm_freq
+
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
 

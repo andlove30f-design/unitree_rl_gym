@@ -139,6 +139,7 @@ def get_args():
         {"name": "--cmd_vy", "type": float, "default": None, "help": "Play/inspection: hold the lateral velocity command fixed [m/s]. Defaults to 0 when any --cmd_* is given"},
         {"name": "--cmd_wz", "type": float, "default": None, "help": "Play/inspection: hold the yaw rate command fixed [rad/s]. Only meaningful when the task does NOT use heading_command, because with it the environment rewrites the yaw rate from the heading error every step; play.py switches the heading loop off when this is given. Mutually exclusive with --cmd_heading"},
         {"name": "--cmd_heading", "type": float, "default": None, "help": "Play/inspection: hold the target heading fixed at this value in DEGREES (0 = the robot's initial facing, +90 = a quarter turn to its left) instead of re-randomizing it. The environment converts it into the yaw rate, so the robot turns to face it and holds. Mutually exclusive with --cmd_wz"},
+        {"name": "--arm_freq", "type": float, "default": None, "help": "Play/inspection: override cfg.arm_trajectory.frequency (Hz) for the scripted-arm task ybt_arm_stand, i.e. how fast the arm works. The shipped 0.5 Hz already peaks at ~3.2 rad/s, past the arm's 3.14 rad/s joint limit, so anything above it is a stress test for the legs rather than a faithful arm motion"},
     ]
     # parse arguments
     args = gymutil.parse_arguments(
