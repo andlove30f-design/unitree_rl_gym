@@ -97,7 +97,8 @@ def play(args):
     # grows with frequency squared.
     if getattr(args, "arm_freq", None) is not None:
         if not hasattr(env_cfg, "arm_trajectory"):
-            sys.exit("--arm_freq only applies to a scripted-arm task (ybt_arm_stand)")
+            sys.exit("--arm_freq only applies to a scripted-arm task "
+                     "(ybt_arm_stand, ybt_arm_walk)")
         if args.arm_freq <= 0.0:
             sys.exit("--arm_freq must be positive")
         print("Arm cycle: {:g} Hz (the task ships {:.2f} Hz)".format(

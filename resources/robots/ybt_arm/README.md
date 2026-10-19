@@ -118,10 +118,12 @@ python resources/robots/ybt_arm/tools/folded_pose.py 1.0 2.0 0.8   # 试一组�
   省力矩，而是为了**降低转动惯量和高度**；代价只是肩关节多了一个 7.1 N·m 的恒定负载
   （3.80 kg 的远端质量、0.19 m 力臂），相对 60 N·m 的上限可以忽略。
 
-## 「作业姿态」与摆动行程（任务 `ybt_arm_stand`）
+## 「作业姿态」与摆动行程（任务 `ybt_arm_stand` / `ybt_arm_walk`）
 
-站立平衡版让机械臂在**折叠姿态 ↔ 作业姿态**之间来回摆（`ybt_arm_stand_config.py` 的
-`arm_trajectory.operation_pose`），用来给腿制造扰动。作业姿态 `(0, −1.5, 0, 0, 0.8, 0.6)`
+两个脚本臂任务——站立版 `ybt_arm_stand` 和走路版 `ybt_arm_walk`——都让机械臂在
+**折叠姿态 ↔ 作业姿态**之间来回摆，用来给腿制造扰动。作业姿态、频率和摆动轨迹定义在
+`ybt_arm_scripted_config.py` 的 `arm_trajectory` 里，**两个任务共用同一份**；
+各自的 config 只覆盖课程门槛。作业姿态 `(0, −1.5, 0, 0, 0.8, 0.6)`
 是**量出来的**，不是试出来的——机械臂只有 5.31 kg 可动质量（整机的 7.7%），
 惯性反力只有约 1% 的翻倒力矩，**唯一的有效通道是质心偏移**：
 
@@ -157,7 +159,8 @@ python resources/robots/ybt_arm/tools/folded_pose.py --sweep 0.0 -1.5 0.0 0.0 0.
 质量矩阵算出来的增益，机械臂停在作业姿态时会**自己振铃**（`arm_joint_3` 3.17 rad/s、
 吃掉 30 N·m 上限的 86%，没有任何接触，也不关腿的事）——那是显式积分阻尼项越过稳定界
 （`d·dt/I < 2`，`dt = 0.005 s`，这些关节的实际惯量小于 URDF 对角元）。
-所以 `ybt_arm_stand` 把机械臂六个关节的**阻尼降到 1/4、刚度抬到 2 倍**，
+所以两个脚本臂任务（`ybt_arm_stand` / `ybt_arm_walk`）共用同一组重调增益：
+机械臂六个关节的**阻尼降到 1/4、刚度抬到 2 倍**，
 **腿的增益逐位不变**（这才是热启动能继承走路策略的原因）。推导和实测见
 [doc/ybt_training_zh.md](../../../doc/ybt_training_zh.md) 第 7.4 节。
 

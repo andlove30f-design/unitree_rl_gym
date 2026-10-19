@@ -33,15 +33,16 @@ SIM_DT = 0.005
 ARM_LIMIT = 50.0   # stands in for the URDF efforts; only the clip test looks at it
 
 
-def make_robot(num_envs=4, cfg=None):
-    """A YBTArmStandRobot with its buffers built, but no PhysX.
+def make_robot(num_envs=4, cfg=None, cls=YBTArmStandRobot):
+    """A scripted-arm robot of class `cls` with its buffers built, but no PhysX.
 
     `_init_buffers` is exercised for real -- only its super() call is replaced with the
     part of LeggedRobot's that the arm code depends on -- so every test below also
-    covers the buffer construction.
+    covers the buffer construction.  `cls` lets the walking task reuse this scaffold;
+    the config still defaults to the standing task's.
     """
     cfg = cfg if cfg is not None else YBTFlatArmStandCfg()
-    robot = object.__new__(YBTArmStandRobot)
+    robot = object.__new__(cls)
     robot.cfg = cfg
     robot.device = "cpu"
     robot.num_envs = num_envs

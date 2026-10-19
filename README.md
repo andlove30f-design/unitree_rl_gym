@@ -39,12 +39,16 @@ python legged_gym/scripts/train.py --task=ybt_arm
 
 # Armed quadruped standing still while the arm works (legs learn to hold the trunk)
 python legged_gym/scripts/train.py --task=ybt_arm_stand
+
+# Armed quadruped walking while the arm works (the hardest of the four)
+python legged_gym/scripts/train.py --task=ybt_arm_walk
 ```
 
 #### ⚙️ Parameter Description
-- `--task`: `ybt` (plain quadruped), `ybt_arm` (quadruped carrying an RM65-B arm) or
+- `--task`: `ybt` (plain quadruped), `ybt_arm` (quadruped carrying an RM65-B arm),
   `ybt_arm_stand` (the same robot, standing: zero velocity commands, the arm swings on a
-  script and the legs balance against it).
+  script and the legs balance against it) or `ybt_arm_walk` (the scripted swing while the
+  legs keep following the walking velocity commands).
 - `--headless`: Defaults to starting with a graphical interface; set to true for headless mode (higher efficiency).
 - `--resume`: Resume training from a checkpoint in the logs.
 - `--experiment_name`: Name of the experiment to run/load.
@@ -73,6 +77,7 @@ To visualize the training results in Gym, run the following command:
 python legged_gym/scripts/play.py --task=ybt
 python legged_gym/scripts/play.py --task=ybt_arm
 python legged_gym/scripts/play.py --task=ybt_arm_stand
+python legged_gym/scripts/play.py --task=ybt_arm_walk
 ```
 
 **Description**:
@@ -90,15 +95,15 @@ Play exports the Actor network, saving it in `logs/{experiment_name}/exported/po
 ## 🔧 YBT Utilities
 
 - `legged_gym/scripts/view_ybt.py`: Inspect the YBT URDF and meshes in the Isaac Gym viewer without training.
-- `legged_gym/scripts/check_ybt.py`: Optional headless smoke test (physics, PPO, checkpoint reload, TorchScript export). Works for all three tasks; pick one with `--task`. On the standing task it also measures how far the scripted arm lags its reference and how far the swing tilts the trunk.
-- `resources/robots/ybt_arm/tools/folded_pose.py`: Check the armed task's folded arm pose -- lowest collision point, centre of mass, inertia and static torques. `--sweep` does the same along the standing task's working swing.
-- `tests/test_ybt.py` / `tests/test_ybt_arm.py` / `tests/test_ybt_arm_stand.py`: CPU regression tests for the asset, config, default stand and reset logic, plus the armed task's freeze and folded pose, and the standing task's scripted reference and curriculum.
+- `legged_gym/scripts/check_ybt.py`: Optional headless smoke test (physics, PPO, checkpoint reload, TorchScript export). Works for all four tasks; pick one with `--task`. On the scripted-arm tasks (`ybt_arm_stand`, `ybt_arm_walk`) it also measures how far the arm lags its reference and how far the swing tilts the trunk.
+- `resources/robots/ybt_arm/tools/folded_pose.py`: Check the armed task's folded arm pose -- lowest collision point, centre of mass, inertia and static torques. `--sweep` does the same along the scripted-arm tasks' working swing.
+- `tests/test_ybt.py` / `tests/test_ybt_arm.py` / `tests/test_ybt_arm_stand.py` / `tests/test_ybt_arm_walk.py`: CPU regression tests for the asset, config, default stand and reset logic, plus the armed task's freeze and folded pose, the scripted reference and curriculum (shared by both scripted-arm tasks), and the walking task's commands, class hierarchy and gates.
 
 ```bash
 python -m unittest discover -s tests -p "test_ybt*.py" -v
 ```
 
-Both YBT tasks, their reward design, their default training parameters and the armed version are documented in [doc/ybt_training_zh.md](doc/ybt_training_zh.md) (Chinese).
+All YBT tasks, their reward design, their default training parameters and the armed versions are documented in [doc/ybt_training_zh.md](doc/ybt_training_zh.md) (Chinese).
 
 ## 🎉 Acknowledgments
 

@@ -61,7 +61,7 @@ class YBTTests(unittest.TestCase):
 
     def test_registration(self):
         self.assertEqual(set(task_registry.task_classes),
-                         {"ybt", "ybt_arm", "ybt_arm_stand"})
+                         {"ybt", "ybt_arm", "ybt_arm_stand", "ybt_arm_walk"})
         self.assertIs(task_registry.get_task_class("ybt"), YBTRobot)
         self.assertTrue(issubclass(YBTRobot, LeggedRobot))
         self.assertEqual(task_registry.get_cfgs("ybt")[1].runner.experiment_name, "flat_ybt")

@@ -5,12 +5,15 @@ Works for any registered YBT task:
     python legged_gym/scripts/check_ybt.py --task=ybt --num_envs=32 --max_iterations=2
     python legged_gym/scripts/check_ybt.py --task=ybt_arm --num_envs=64 --max_iterations=3
     python legged_gym/scripts/check_ybt.py --task=ybt_arm_stand --num_envs=64 --max_iterations=3
+    python legged_gym/scripts/check_ybt.py --task=ybt_arm_walk --num_envs=64 --max_iterations=3
 
-On the scripted-arm standing task (`ybt_arm_stand`) the arm's joints are also at action
-scale 0, but their PD reference is moving, so "does it hold its default pose" is the
-wrong question there: the scripted joints are instead checked against `arm_target`, the
-reference the script is asking for, and the run doubles as the measurement of how hard
-the swing actually pushes the robot (the trunk tilt reported at the end).
+On the scripted-arm tasks (`ybt_arm_stand`, `ybt_arm_walk`) the arm's joints are also at
+action scale 0, but their PD reference is moving, so "does it hold its default pose" is
+the wrong question there: the scripted joints are instead checked against `arm_target`,
+the reference the script is asking for, and the run doubles as the measurement of how
+hard the swing actually pushes the robot (the trunk tilt reported at the end).  The
+policy is not exercised -- the settle loop steps with zero actions -- so the walk task
+is measured standing still with the arm working, not walking.
 
 Artifacts go to logs/<task>_smoke, never to the production flat_ybt experiment.
 """
@@ -99,7 +102,7 @@ def check():
 
         # Joints the task froze (action scale 0): they must hold their pose no matter
         # what the policy outputs -- this is the only place that checks it.  On the
-        # scripted-arm standing task the same joints are being driven, so what they have
+        # scripted-arm tasks the same joints are being driven, so what they have
         # to hold is the script's reference, not the default pose, and they belong in
         # the scripted check below instead.
         frozen = [i for i, name in enumerate(env.dof_names)
