@@ -324,15 +324,26 @@ class YBTStairsCfg(YBTFlatCfg):
         dynamic_friction = 1.0
         restitution = 0.0
         # spelled out here rather than reusing the base class's misspelled
-        # `slope_treshold`; risers above this slope are snapped to vertical so a
-        # step is a step and not a one-cell ramp
-        slope_threshold = 1.5
+        # `slope_treshold`.  The heightfield converter snaps slopes steeper than
+        # this to vertical surfaces, but its test is a strict `>` on raw height
+        # units: `threshold_units = slope_threshold * horizontal_scale /
+        # vertical_scale`.  With 0.10 m cells and 0.005 m units a 15 cm riser is
+        # 30 units, so the old value 1.5 produced exactly 30.000000000000004
+        # units and *never* snapped -- every "step" was a 56.3 deg ramp, steeper
+        # than the 45 deg friction angle of the terrain (mu = 1.0).  0.5 snaps
+        # anything above 5 cm; the 0-5 cm levels stay gentle ramps (<= 26.6 deg)
+        # and keep the difficulty ladder.
+        slope_threshold = 0.5
 
         # --- staircase tile (mirrors StairsTerrainCfg; keep the two in step) ---
         num_steps = 8
         step_height = 0.15   # the hardest level's riser, in metres
         step_depth = 0.30
-        approach_depth = 0.9
+        # 2.0 m of flat run-up: the robot is ~0.7 m long, so the old 0.9 m put
+        # its front feet 10 cm from the first riser and never let it establish
+        # a gait before the climb.  The tile is 5.3 m long (was 4.2 m), which
+        # costs ~26% more terrain triangles and stays well inside the GPU budget.
+        approach_depth = 2.0
         platform_depth = 0.9
         lane_width = 1.20    # one robot's private lane
 
@@ -377,15 +388,25 @@ class YBTStairsCfg(YBTFlatCfg):
         base_height_target = 0.50
         max_contact_force = 500.0
         soft_dof_pos_limit = 0.9
-        # The flat task lifts a swing foot 5 cm clear; a 15 cm riser needs the
-        # foot to come up over the step or the robot walks into it.
+        # Keep the negative terms. Clipping the total at zero is what turned
+        # "shin hits the riser" into the same value as "stand still" and locked
+        # the first stairs run into marching in place.
+        only_positive_rewards = False
+        # Measured above the floor under the *trunk*, not above the step under
+        # the foot: a swing foot crossing a riser is already over the upper
+        # tread, so the old reference silently asked for 15 + 17 = 32 cm of
+        # lift. 17 cm above the trunk's step clears a 15 cm riser with 2 cm to
+        # spare.
         feet_clearance_target = 0.17
         feet_clearance_cap = 0.27
-        # The inherited 1.0 s target is longer than a step period on 0.30 m
-        # treads (~0.25 s of air per foot at 0.5 m/s), so the term would come out
-        # negative at every touchdown and pay the robot to slow down. Match it to
-        # a stair gait instead.
+        # Kept for the reward function, but the scale is zero below: the first
+        # run measured this term at -0.005/s even after lowering the threshold.
+        # Turn it back on once the gait is stable.
         feet_air_time_positive_threshold = 0.2
+        # Free overshoot above the commanded forward speed before
+        # `_reward_speed_limit` starts charging. Ordinary acceleration and the
+        # push over a riser sit inside it; a 2.5 m/s sprint does not.
+        speed_margin = 0.15
 
         class scales(YBTFlatCfg.rewards.scales):
             torques = -0.00001
@@ -393,19 +414,61 @@ class YBTStairsCfg(YBTFlatCfg):
             base_height = -1.0
             dof_pos_limits = -10.0
             feet_clearance = 0.3
-            feet_air_time = 0.5
-            # Zero on the flat task: a foot hitting the *side* of a riser rather
-            # than the top of it. The base cfg calls this knob `feet_stumble`, but
-            # non-zero scales are looked up as `_reward_<name>` and no
-            # `_reward_feet_stumble` exists -- the function is `_reward_stumble`,
-            # so that is the name that has to carry the weight.
-            stumble = -0.2
+            feet_air_time = 0.0
+            # A shin brushing a riser is part of climbing, not a failure. The
+            # inherited -1.0 was never tuned for stairs (see
+            # doc/ybt_stairs_training_zh.md, section 7).
+            collision = -0.3
+            # Zero: penalises exactly the horizontal foot/riser contacts the
+            # task has to make.
+            stumble = 0.0
+            # --- new shaping (see ybt_stairs_env.py) ---
+            # Net forward displacement / (commanded speed * dt): O(1) when the
+            # robot actually climbs, ~0 when it marches in place.
+            progress = 1.0
+            # One-shot bonus at the top. `_reward_reach_top` divides by dt
+            # because `_prepare_reward_function` multiplies every scale by dt,
+            # so this is a real +2.0 on the step that crosses the last riser.
+            # It was 5.0; together with a short episode (which stops paying
+            # every per-step cost) that jackpot made sprinting to the top
+            # profitable, and the 2026-10-19 fine-tunes all collapsed into a
+            # 2.5 m/s scramble.  The dense `progress` term carries the success
+            # signal now; this is only a small terminal bonus.
+            reach_top = 2.0
+            # Squared overspeed above command + `rewards.speed_margin`.
+            # At the sprint (2.5 m/s against a 0.2-0.6 command) this charges
+            # several units per step while `tracking_lin_vel` has already
+            # flattened out, so the gradient survives.
+            speed_limit = -1.0
+            # --- straight-line shaping ---
+            # The 93%-success warm-start policy climbed yawed 24 deg and crabbed
+            # across several lanes (measured 2026-10-19). `tracking_ang_vel`
+            # only sees the yaw *rate* (see _reward_heading), and the lateral
+            # component of the diagonal gait is averaged away inside
+            # `tracking_lin_vel`. `lane` prices the position, with a dead band
+            # so transient sideways corrections are free, and is what stops
+            # sustained drift; `heading` and `lateral_vel` price the
+            # orientation and the crab speed directly. At -1.0 yaw parked
+            # around 10 deg; -1.5 (together with the lower learning rate below)
+            # holds 6-7 deg without losing the hardest levels.
+            heading = -1.5
+            lateral_vel = -0.2
+            lane = -1.0
 
     class sim(YBTFlatCfg.sim):
         dt = 0.005
 
 
 class YBTStairsCfgPPO(LeggedRobotCfgPPO):
+    class algorithm(LeggedRobotCfgPPO.algorithm):
+        # This task is usually fine-tuned from a warm start, and the base 1e-3
+        # rewrites a converged walking policy within ~50 iterations: starting
+        # from a 3.8 deg-yaw policy, 50 iterations produced a 19.6 deg one,
+        # and at 5e-4 another 100 iterations of the same reward moved yaw from
+        # 10 deg to 25 deg. A third of the base keeps the warm start in its
+        # basin long enough for the shaping terms to do their work.
+        learning_rate = 3.e-4
+
     class runner(LeggedRobotCfgPPO.runner):
         experiment_name = "stairs_ybt"
         run_name = ""

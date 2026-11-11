@@ -21,6 +21,7 @@ from isaacgym.torch_utils import torch_rand_float
 from legged_gym.envs.base.legged_robot import LeggedRobot
 from legged_gym.envs.ybt.ybt_env import YBTRobot, validate_ybt_asset
 from legged_gym.envs.ybt.ybt_stairs_config import TiledStairsTerrain
+from legged_gym.utils.math import wrap_to_pi
 
 
 class YBTStairsRobot(YBTRobot):
@@ -34,6 +35,15 @@ class YBTStairsRobot(YBTRobot):
         # -- so re-place everyone through the normal reset path before the first
         # step. reset_idx is not called at init by the base class.
         self.reset_idx(torch.arange(self.num_envs, device=self.device))
+
+    def _init_buffers(self):
+        super()._init_buffers()
+        # Net-progress reward state: the tile-local x at the previous policy
+        # step, and whether the current step crossed the top (set in
+        # check_termination, consumed by _reward_reach_top before the reset).
+        self.last_local_x = self._local_x()
+        self.reached_top = torch.zeros(self.num_envs, dtype=torch.bool,
+                                       device=self.device)
 
     # ------------------------------------------------------------------ #
     # Simulation and terrain
@@ -160,30 +170,45 @@ class YBTStairsRobot(YBTRobot):
         steps = steps.clamp(min=0.0, max=float(self.stairs.num_steps))
         return steps * self.env_step_height.unsqueeze(-1)
 
+    def _local_x(self):
+        """Trunk x in tile coordinates (0 = the near edge of the run-up)."""
+        return (self.root_states[:, 0] - self.env_origins[:, 0]
+                + self.stairs.spawn_x)
+
     def _past_top_of_stairs(self):
-        local_x = (self.root_states[:, 0] - self.env_origins[:, 0]
-                   + self.stairs.spawn_x)
-        return local_x > self.stairs.x_top
+        return self._local_x() > self.stairs.x_top
 
     # ------------------------------------------------------------------ #
     # Rewards that a raised, stepped ground breaks
     # ------------------------------------------------------------------ #
     def _reward_feet_clearance(self):
-        """Swing-foot clearance measured above the step the foot is over.
+        """Swing-foot height above the floor the *trunk* stands on.
 
-        ``YBTRobot`` measures the foot's world z, which is right on a plane but
-        would pay full marks for standing still on a raised step, and would never
-        ask a foot to clear the next riser. Measuring relative to the local step
-        makes 15 cm of lift pay the same on level 0 and on level 15.
+        Measuring against the step under the foot (the previous version) looked
+        right, but a swing foot crossing a riser is already over the upper
+        tread, so the reference jumped up by the riser height exactly when the
+        foot needed to clear it: on a 15 cm staircase the target became 32 cm
+        above the take-off tread and the reward was almost always zero.  The
+        trunk's step is the physical floor the gait has to clear, and it is the
+        same reference ``_reward_base_height`` uses.
+
+        The term peaks at ``cap`` and is two-sided: 0 at ``target``, 1 at
+        ``cap``, 0 again at ``cap + (cap - target)`` and -1 from
+        ``cap + 2 * (cap - target)`` upwards.  The flat task's one-sided
+        version is what produced the high-stepping gait documented in
+        ybt_training_zh.md, and on stairs a foot lifted much above the tread
+        wastes the time it needs to reach the next riser.
         """
         contact = self.contact_forces[:, self.feet_indices, 2] > 1.
-        foot_x = self.rigid_body_states[:, self.feet_indices, 0]
         foot_z = self.rigid_body_states[:, self.feet_indices, 2]
-        ground = self._local_ground_heights(foot_x)
+        ground = self._local_ground_heights(self.root_states[:, 0:1])
         target = self.cfg.rewards.feet_clearance_target
         cap = self.cfg.rewards.feet_clearance_cap
-        clearance = ((foot_z - ground - target) / (cap - target)).clip(min=0., max=1.)
-        return torch.sum(clearance * (~contact), dim=1)
+        width = cap - target
+        height = foot_z - ground
+        band = ((height - target) / width).clip(min=0., max=1.)
+        over = ((height - cap) / width).clip(min=0., max=2.)
+        return torch.sum((band - over) * (~contact), dim=1)
 
     def _reward_base_height(self):
         """Trunk height above the step it is standing on, not above z = 0.
@@ -215,14 +240,114 @@ class YBTStairsRobot(YBTRobot):
         self.feet_air_time *= ~contact_filt
         return reward
 
+    def _reward_progress(self):
+        """Net forward displacement, normalised by the commanded distance.
+
+        ``tracking_lin_vel`` is instantaneous and can be farmed by oscillating
+        in place; a robot jammed against a riser still reads a nonzero
+        velocity. This term only pays for actually moving the trunk towards the
+        top. Dividing by the commanded speed makes 1.0 the value of perfect
+        tracking, so the scale is comparable to ``tracking_lin_vel``. The first
+        step after a reset is masked: the reset teleport is not progress.
+
+        The upper clip is 1.0, not 2.0: paying double for moving at twice the
+        commanded speed turned "climb as fast as possible" into a reward, and
+        the fine-tuning runs did exactly that (see ``_reward_speed_limit``).
+        """
+        local_x = self._local_x()
+        delta = local_x - self.last_local_x
+        self.last_local_x[:] = local_x
+        speed = torch.norm(self.commands[:, :2], dim=1).clamp(min=0.1)
+        progress = (delta / (speed * self.dt)).clip(min=-1.0, max=1.0)
+        return progress * (self.episode_length_buf > 1)
+
+    def _reward_heading(self):
+        """Keep the trunk pointing along the commanded heading.
+
+        ``tracking_ang_vel`` only rewards the yaw *rate* the heading controller
+        asks for, and its exponential is almost flat for the small rates
+        involved: a robot that ignores a 20 deg heading error still collects
+        about 0.95 of it. Nothing else in the inherited reward penalises a
+        static yaw offset, so the first successful run learned to climb the
+        staircase diagonally. This term prices the offset itself.
+        """
+        if not self.cfg.commands.heading_command:
+            return torch.zeros(self.num_envs, device=self.device)
+        error = wrap_to_pi(self.commands[:, 3] - self.rpy[:, 2])
+        return torch.square(error)
+
+    def _reward_lateral_vel(self):
+        """Penalise sideways motion in the body frame (crab walking).
+
+        ``tracking_lin_vel`` contains it too, but averaged with the forward
+        error inside one exponential; a diagonal gait can still be worth it
+        once ``progress`` pays for the resulting x displacement. This term
+        prices the lateral component directly.
+        """
+        return torch.abs(self.base_lin_vel[:, 1])
+
+    def _reward_lane(self):
+        """Keep the trunk over its lane centre line.
+
+        Each robot owns a 1.2 m lane and the steps span the full lane, so a
+        sideways-travelling gait still climbs; the first successful policy
+        drifted across several lanes. Penalising the *position* (not the
+        velocity) lets the controller make brief lateral corrections for free,
+        which matters on 0.30 m treads, while charging for sustained drift.
+        The 0.10 m dead band keeps the spawn scatter out of the term.
+        """
+        lateral = self.root_states[:, 1] - self.env_origins[:, 1]
+        excess = (torch.abs(lateral) - 0.10).clamp(min=0.)
+        return torch.square(excess)
+
+    def _reward_speed_limit(self):
+        """One-sided penalty for running faster than commanded.
+
+        Fine-tuning kept collapsing into a sprint: over 300 iterations the
+        episode length fell from ~260 to ~72 policy steps and the body speed
+        rose to 2.5 m/s while the command was 0.2-0.6 m/s. The exponential
+        ``tracking_lin_vel`` is nearly flat at that error, so it gave no
+        gradient back; meanwhile a short episode stops paying *every* per-step
+        cost (tracking, lane, heading, action rate, ...), and the one-shot
+        ``reach_top`` bonus is collected sooner.
+
+        This term closes the gap with a gradient that does not vanish: squared
+        speed over the command (plus a small margin, so ordinary acceleration
+        is free). It is deliberately one-sided; being too slow is still
+        ``tracking_lin_vel``'s job, and on a staircase the climb itself needs
+        bursts the average command does not describe.
+        """
+        margin = self.cfg.rewards.speed_margin
+        excess = (self.base_lin_vel[:, 0] - self.commands[:, 0] - margin).clamp(min=0.)
+        return torch.square(excess)
+
+    def _reward_reach_top(self):
+        """One-shot reward for crossing the last riser.
+
+        ``_prepare_reward_function`` multiplies every scale by ``dt``, so divide
+        by ``dt`` here to make the configured number the real bonus.
+        """
+        return self.reached_top.float() / self.dt
+
     # ------------------------------------------------------------------ #
     # Termination
     # ------------------------------------------------------------------ #
     def check_termination(self):
-        """Resets the base conditions plus "reached the top of the staircase"."""
+        """Resets the base conditions plus "reached the top of the staircase".
+
+        Reaching the top is a success, so it is flagged in ``time_out_buf`` as
+        well: rsl_rl adds ``gamma * V(s) * time_outs`` on the bootstrap, which
+        lets the value function see the rest of the horizon instead of treating
+        the success as a terminal dead end. ``time_out_buf`` is cleared by
+        ``super().check_termination`` at the start of every step.
+        """
         super().check_termination()
         if self.cfg.terrain.terminate_at_top:
             # the staircase is a fixed-length climb: once the last riser is
             # behind the robot it has finished the task, and there is nothing
             # beyond the platform but the next tile's run-up
-            self.reset_buf |= self._past_top_of_stairs()
+            self.reached_top = self._past_top_of_stairs()
+            self.reset_buf |= self.reached_top
+            self.time_out_buf |= self.reached_top
+        else:
+            self.reached_top = torch.zeros_like(self.reset_buf)

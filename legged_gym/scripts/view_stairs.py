@@ -43,7 +43,11 @@ from legged_gym.envs.ybt.ybt_stairs_config import (  # noqa: E402
     StairsTerrain, StairsTerrainCfg, TiledStairsTerrain, YBTStairsCfg)
 from legged_gym.scripts.view_ybt import lowest_point  # noqa: E402
 
-SLOPE_THRESHOLD = 1.5  # risers above this slope are snapped to vertical
+# Use the trainer's own value: the converter's threshold is a slope, so it means
+# the same angle at the preview's 0.05 m cells and the map's 0.10 m cells.
+# 0.5 snaps anything steeper than 5 cm of rise per cell (26.6 deg) to a vertical
+# face; the old 1.5 left 15 cm risers as 56.3 deg ramps.
+SLOPE_THRESHOLD = YBTStairsCfg.terrain.slope_threshold
 
 
 def build_mesh(gym, sim, height_field, horizontal_scale, vertical_scale,

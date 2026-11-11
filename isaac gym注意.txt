@@ -1,0 +1,18 @@
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+echo $LD_LIBRARY_PATH
+
+conda activate unitree-rl
+
+python legged_gym/scripts/train.py --task=xxx
+
+
+python legged_gym/scripts/play.py --task=xxx
+
+
+
+SEA
+conda activate sea_nav
+cd ~/SEA-Nav-Code
+export PYTHONPATH=/home/yh/SEA-Nav-Code/training/legged_gym:$PYTHONPATH
+python training/legged_gym/legged_gym/scripts/train.py --task go2_pos_rough --headless --num_envs 1024
+
